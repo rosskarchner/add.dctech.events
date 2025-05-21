@@ -41,6 +41,7 @@
         {% endfor %}
 
         <form id="confirmForm" action="/confirm/{{ submission.submission_id }}/submit" method="POST" class="mt-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-primary">Confirm and Create Pull Request</button>
             <a href="/" class="btn btn-secondary">Cancel</a>
         </form>
@@ -55,7 +56,7 @@
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({})  // Empty object since we don't need to send any data
+                body: JSON.stringify({csrf_token: '{{ csrf_token }}'})  // Include CSRF token
             })
             .then(response => {
                 if (response.ok) {

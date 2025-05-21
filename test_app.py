@@ -22,6 +22,7 @@ def test_index_returns_form(test_client):
     assert 'id="errorContainer"' in response.body
     assert 'id="successContainer"' in response.body
     assert 'id="formContainer"' in response.body
+    assert 'csrf_token' in response.body  # Verify CSRF token is included
 
 @patch('os.path.exists')
 @patch('os.getcwd')
@@ -58,6 +59,18 @@ def test_submit_event_invalid_request(test_client):
     )
     assert response.status_code == 400
     assert 'Invalid JSON in request body' in response.json_body['message']
+
+    # Test missing CSRF token
+    response = test_client.http.post(
+        '/submit',
+        headers={'Content-Type': 'application/json'},
+        body=json.dumps({
+            'email': 'test@example.com',
+            'events': []
+        })
+    )
+    assert response.status_code == 403
+    assert 'Invalid or missing CSRF token' in response.json_body['error']
 
 def test_submit_event_invalid_data(test_client):
     # Test with invalid email
@@ -128,9 +141,14 @@ def test_submit_event_success(mock_ses, mock_table, test_client):
     # Mock SES send_email
     mock_ses.send_email = MagicMock()
     
+    # Get CSRF token from index page
+    index_response = test_client.http.get('/')
+    csrf_token = index_response.body.split('csrf_token: \'')[1].split('\'')[0]
+    
     # Test with all optional fields omitted and single event
     test_data = {
         'email': 'test@example.com',
+        'csrf_token': csrf_token,
         'events': [{
             'title': 'Test Event',
             'date': '2024-01-01',
@@ -259,6 +277,10 @@ def test_confirm_submission_flow(mock_secrets, mock_ses, mock_github, mock_table
     assert 'Confirm Event Submission' in response.body
     assert 'Test Event 1' in response.body
     assert 'Test Event 2' in response.body
+    assert 'csrf_token' in response.body  # Verify CSRF token is included
+    
+    # Get CSRF token from preview page
+    csrf_token = response.body.split('csrf_token: \'')[1].split('\'')[0]
     
     # Mock Secrets Manager for actual submission
     mock_secrets.get_secret_value.return_value = {
@@ -277,17 +299,34 @@ def test_confirm_submission_flow(mock_secrets, mock_ses, mock_github, mock_table
     mock_repo.create_pull.return_value = mock_pr
     
     # Test actual submission with JSON
-    response = test_client.http.post('/confirm/test-id/submit', headers={'Content-Type': 'application/json'})
+    response = test_client.http.post(
+        '/confirm/test-id/submit',
+        headers={'Content-Type': 'application/json'},
+        body=json.dumps({'csrf_token': csrf_token})
+    )
     assert response.status_code == 200
     
     # Test actual submission with form-encoded data
-    response = test_client.http.post('/confirm/test-id/submit', headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    response = test_client.http.post(
+        '/confirm/test-id/submit',
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        body=f'csrf_token={csrf_token}'
+    )
     assert response.status_code == 200
     
     # Test submission with invalid content type
     response = test_client.http.post('/confirm/test-id/submit', headers={'Content-Type': 'text/plain'})
     assert response.status_code == 415
     assert 'Content-Type must be application/json or application/x-www-form-urlencoded' in response.json_body['error']
+    
+    # Test submission without CSRF token
+    response = test_client.http.post(
+        '/confirm/test-id/submit',
+        headers={'Content-Type': 'application/json'},
+        body=json.dumps({})
+    )
+    assert response.status_code == 403
+    assert 'Invalid or missing CSRF token' in response.json_body['error']
     assert 'text/html' in response.headers['Content-Type']
     assert 'Event Submission Complete' in response.body
     assert mock_pr.html_url in response.body
@@ -355,6 +394,45 @@ def test_get_secret(mock_secrets):
     with pytest.raises(ClientError) as exc_info:
         app.get_secret('test-secret-name')
     assert 'AccessDeniedException' in str(exc_info.value)
+
+@patch('app.secrets')
+def test_get_csrf_secret(mock_secrets):
+    # Test successful secret retrieval with string value
+    mock_secrets.get_secret_value.return_value = {
+        'SecretString': 'test-csrf-secret'
+    }
+    
+    with patch('app.get_secret') as mock_get_secret:
+        mock_get_secret.return_value = 'test-csrf-secret'
+        secret = app.get_csrf_secret()
+        assert secret == 'test-csrf-secret'
+        mock_get_secret.assert_called_once_with('dctech-events/csrf-secret')
+    
+    # Test successful secret retrieval with JSON value
+    mock_secrets.get_secret_value.return_value = {
+        'SecretString': '{"CSRF_SECRET_KEY": "test-csrf-secret-json"}'
+    }
+    
+    with patch('app.get_secret') as mock_get_secret:
+        mock_get_secret.return_value = '{"CSRF_SECRET_KEY": "test-csrf-secret-json"}'
+        secret = app.get_csrf_secret()
+        assert secret == 'test-csrf-secret-json'
+    
+    # Test error handling with debug mode
+    with patch('app.get_secret') as mock_get_secret:
+        mock_get_secret.side_effect = Exception('Test error')
+        with patch('app.app.debug', True):
+            secret = app.get_csrf_secret()
+            assert secret == 'debug-only-csrf-secret-key'
+    
+    # Test error handling without debug mode
+    with patch('app.get_secret') as mock_get_secret:
+        mock_get_secret.side_effect = Exception('Test error')
+        with patch('app.app.debug', False):
+            with pytest.raises(Exception) as exc_info:
+                app.get_csrf_secret()
+            assert 'Test error' in str(exc_info.value)
+
 
 def test_templates_included_in_deployment():
     # Create a temporary config object

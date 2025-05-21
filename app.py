@@ -11,6 +11,7 @@ from github import Github
 import base64
 from jinja2 import Environment, FileSystemLoader
 from wtforms import Form, StringField, DateField, TimeField, URLField, TextAreaField, EmailField, validators
+from chalicelib.csrf import generate_csrf_token, validate_csrf_token
 
 class EventForm(Form):
     title = StringField('Event Title', [validators.DataRequired(), validators.Length(min=3, max=200)])
@@ -33,6 +34,24 @@ dynamodb = boto3.resource('dynamodb')
 ses = boto3.client('ses')
 secrets = boto3.client('secretsmanager')
 submissions_table = dynamodb.Table(os.environ.get('SUBMISSIONS_TABLE', 'DCTechEventsSubmissions'))
+
+# CSRF secret key from AWS Secrets Manager
+def get_csrf_secret():
+    """Get CSRF secret key from AWS Secrets Manager."""
+    try:
+        secret_name = os.environ.get('CSRF_SECRET_NAME', 'dctech-events/csrf-secret')
+        secret = get_secret(secret_name)
+        if isinstance(secret, str):
+            return secret
+        # If secret is JSON string, parse it and get the key
+        secret_dict = json.loads(secret)
+        return secret_dict.get('CSRF_SECRET_KEY')
+    except Exception as e:
+        if app.debug:
+            return 'debug-only-csrf-secret-key'
+        raise
+
+CSRF_SECRET_KEY = get_csrf_secret()
 
 def get_secret(secret_name):
     """Fetch a secret from AWS Secrets Manager."""
@@ -61,9 +80,10 @@ env = Environment(loader=FileSystemLoader(template_dir))
 @app.route('/')
 def index():
     """Render the submission form."""
+    csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('form.html')
     return Response(
-        body=template.render(),
+        body=template.render(csrf_token=csrf_token),
         headers={'Content-Type': 'text/html'}
     )
 
@@ -87,6 +107,14 @@ def submit_event():
         return Response(
             body={'message': 'Invalid JSON in request body'},
             status_code=400
+        )
+    
+    # Validate CSRF token
+    csrf_token = data.get('csrf_token')
+    if not csrf_token or not validate_csrf_token(csrf_token, CSRF_SECRET_KEY):
+        return Response(
+            body={'error': 'Invalid or missing CSRF token'},
+            status_code=403
         )
     
     # Validate user information using WTForms
@@ -184,9 +212,10 @@ def preview_confirmation(submission_id):
             status_code=400
         )
     
+    csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('confirm.html')
     return Response(
-        body=template.render(submission=submission),
+        body=template.render(submission=submission, csrf_token=csrf_token),
         headers={'Content-Type': 'text/html'}
     )
 
@@ -201,6 +230,22 @@ def confirm_submission(submission_id):
         return Response(
             body={'error': 'Content-Type must be application/json or application/x-www-form-urlencoded'},
             status_code=415
+        )
+    
+    # Get CSRF token from request body
+    if content_type.startswith('application/json'):
+        try:
+            data = request.json_body or {}
+        except ValueError:
+            data = {}
+    else:
+        data = request.form_params or {}
+    
+    csrf_token = data.get('csrf_token')
+    if not csrf_token or not validate_csrf_token(csrf_token, CSRF_SECRET_KEY):
+        return Response(
+            body={'error': 'Invalid or missing CSRF token'},
+            status_code=403
         )
     
     # Get submission from DynamoDB

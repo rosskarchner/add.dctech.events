@@ -279,6 +279,7 @@
                 submitted_by: formData.get('submitted_by') || 'anonymous',
                 submitter_link: formData.get('submitter_link'),
                 email: formData.get('email'),
+                csrf_token: '{{ csrf_token }}',
                 events: []
             };
 

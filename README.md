@@ -53,6 +53,24 @@ This is a serverless web application built with AWS Chalice that allows users to
    - AWSLambdaBasicExecutionRole
    - DynamoDB access to the submissions table
    - SES send email permissions
+   - Secrets Manager access for CSRF secret:
+     ```json
+     {
+         "Version": "2012-10-17",
+         "Statement": [
+             {
+                 "Effect": "Allow",
+                 "Action": [
+                     "secretsmanager:GetSecretValue"
+                 ],
+                 "Resource": [
+                     "arn:aws:secretsmanager:*:*:secret:dctech-events/csrf-secret-*",
+                     "arn:aws:secretsmanager:*:*:secret:dctech-events/github-token-*"
+                 ]
+             }
+         ]
+     }
+     ```
 
 ## Deployment
 
@@ -93,11 +111,32 @@ The application consists of several components:
 
 ## Security Considerations
 
-- Use environment variables for sensitive information
+### CSRF Protection
+The application uses CSRF tokens to protect forms from cross-site request forgery attacks. The CSRF secret key is stored in AWS Secrets Manager and should be:
+
+- At least 32 characters long
+- Randomly generated using a cryptographically secure random number generator
+- Rotated every 90 days
+- Unique per environment (development, staging, production)
+
+To create a new CSRF secret:
+```bash
+# Generate a new secret
+openssl rand -base64 32
+
+# Store it in AWS Secrets Manager
+aws secretsmanager create-secret \
+    --name dctech-events/csrf-secret \
+    --secret-string '{"CSRF_SECRET_KEY":"your-generated-key"}'
+```
+
+### Other Security Measures
+- Use environment variables for non-secret configuration
 - Implement rate limiting on the API Gateway
 - Use AWS KMS for encrypting sensitive data
 - Configure CORS appropriately
 - Use secure HTTPS endpoints
+- Regularly rotate all secrets and access keys
 
 ## Contributing
 
