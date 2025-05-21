@@ -1,0 +1,12 @@
+chalice
+boto3
+pyyaml
+python-frontmatter
+requests
+jinja2
+PyGithub
+cryptography
+cffi
+wheel
+WTForms
+email_validator

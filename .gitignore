@@ -1,0 +1,6 @@
+.chalice/deployments
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
