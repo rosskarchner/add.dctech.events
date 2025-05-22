@@ -27,13 +27,32 @@ class EventSubmissionForm(Form):
     events = None  # Will be set dynamically
 
 app = Chalice(app_name='dctech-events-submit')
-app.debug = True
+app.debug = False
 
 # Initialize services
 dynamodb = boto3.resource('dynamodb')
 ses = boto3.client('ses')
 secrets = boto3.client('secretsmanager')
 submissions_table = dynamodb.Table(os.environ.get('SUBMISSIONS_TABLE', 'DCTechEventsSubmissions'))
+
+
+def get_secret(secret_name):
+    """Fetch a secret from AWS Secrets Manager."""
+    try:
+        response = secrets.get_secret_value(SecretId=secret_name)
+        if 'SecretString' in response:
+            return response['SecretString']
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code')
+        if error_code == 'AccessDeniedException':
+            print(f"Access denied to secret {secret_name}. Please check IAM permissions.")
+        else:
+            print(f"Error fetching secret {secret_name}: {str(e)}")
+        raise
+    except Exception as e:
+        print(f"Error fetching secret {secret_name}: {str(e)}")
+        raise
+
 
 # CSRF secret key from AWS Secrets Manager
 def get_csrf_secret():
@@ -53,22 +72,7 @@ def get_csrf_secret():
 
 CSRF_SECRET_KEY = get_csrf_secret()
 
-def get_secret(secret_name):
-    """Fetch a secret from AWS Secrets Manager."""
-    try:
-        response = secrets.get_secret_value(SecretId=secret_name)
-        if 'SecretString' in response:
-            return response['SecretString']
-    except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code')
-        if error_code == 'AccessDeniedException':
-            print(f"Access denied to secret {secret_name}. Please check IAM permissions.")
-        else:
-            print(f"Error fetching secret {secret_name}: {str(e)}")
-        raise
-    except Exception as e:
-        print(f"Error fetching secret {secret_name}: {str(e)}")
-        raise
+
 
 # Configure Jinja2
 template_dir = os.path.join(os.getcwd(), 'chalicelib', 'templates')
