@@ -26,11 +26,9 @@
         <div id="formContainer">
             <h1 class="mb-4">Submit DC Tech Events</h1>
 
-            <p>Use this form to submit events to <a href="https://dctech.events">DC Tech Events</a>. </p>
-            <p>Does your group publish an iCal file or RSS feed of events? Create a GitHub pull request adding it to 
-                <a href="https://github.com/rosskarchner/dctech.events/tree/main/_groups">this folder</a>, 
-                and we'll grab new events automatically! If you publish your events on sites like meetup or lu.ma, you've
-            probably got one. If you need help navigating GitHub, just send an email to ross@karchner.com.
+            <p>Use this form to submit events to <a href="https://dctech.events">DC Tech Events</a> (up to five at a time). </p>
+            <p><strong>Even better!</strong> You can add a <a href="/meetup">meetup.com group</a> or
+                <a href="/ical">iCal feed</a> and we'll start pulling in events automatically!</p>
             </p>
             
             <form id="eventForm" class="needs-validation" novalidate>
@@ -53,7 +51,7 @@
                     <div class="mb-3">
                         <label for="date-0" class="form-label required">Date and Time</label>
                         <div class="row">
-                            <div class="col-md-6">
+                            <div class="col-md-3">
                                 <input type="date" class="form-control" id="date-0" name="events[0].date" required>
                             </div>
                             <div class="col-md-2">
@@ -93,6 +91,24 @@
                     <div class="mb-3">
                         <label for="location-0" class="form-label">Location</label>
                         <input type="text" class="form-control" id="location-0" name="events[0].location">
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">Optional Details</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label for="end-date-0" class="form-label">End Date</label>
+                                    <input type="date" class="form-control" id="end-date-0" name="events[0].end_date">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="cost-0" class="form-label">Cost</label>
+                                    <input type="text" class="form-control" id="cost-0" name="events[0].cost" placeholder="e.g. Free, $10, $5-20">
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -141,8 +157,23 @@
         </div>
     </div>
 
+
     <script>
+        const MAX_EVENTS = 5;
         let eventCount = 1;
+
+        // Function to update the Add Event button state
+        function updateAddEventButtonState() {
+            const addEventBtn = document.getElementById('addEventBtn');
+            const currentEventCount = document.querySelectorAll('.event-section').length;
+            if (currentEventCount >= MAX_EVENTS) {
+                addEventBtn.disabled = true;
+                addEventBtn.title = 'Maximum limit of 5 events reached';
+            } else {
+                addEventBtn.disabled = false;
+                addEventBtn.title = '';
+            }
+        }
 
         // Function to update the hidden time input for a specific event
         function updateTimeInput(index) {
@@ -169,11 +200,20 @@
         }
 
         // Add event listeners to the first event's time dropdowns
-        document.addEventListener('DOMContentLoaded', () => addTimeEventListeners(0));
+        document.addEventListener('DOMContentLoaded', () => {
+            addTimeEventListeners(0);
+            updateAddEventButtonState();
+        });
 
         // Function to add a new event section
         document.getElementById('addEventBtn').addEventListener('click', () => {
             const container = document.getElementById('eventsContainer');
+            const currentEventCount = document.querySelectorAll('.event-section').length;
+            
+            if (currentEventCount >= MAX_EVENTS) {
+                return; // Don't add more events if limit is reached
+            }
+
             const newIndex = eventCount++;
             
             // Show remove buttons when there's more than one event
@@ -197,7 +237,7 @@
                     <div class="mb-3">
                         <label for="date-${newIndex}" class="form-label required">Date and Time</label>
                         <div class="row">
-                            <div class="col-md-6">
+                            <div class="col-md-3">
                                 <input type="date" class="form-control" id="date-${newIndex}" name="events[${newIndex}].date" required>
                             </div>
                             <div class="col-md-2">
@@ -238,11 +278,30 @@
                         <label for="location-${newIndex}" class="form-label">Location</label>
                         <input type="text" class="form-control" id="location-${newIndex}" name="events[${newIndex}].location">
                     </div>
+
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">Optional Details</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label for="end-date-${newIndex}" class="form-label">End Date</label>
+                                    <input type="date" class="form-control" id="end-date-${newIndex}" name="events[${newIndex}].end_date">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="cost-${newIndex}" class="form-label">Cost</label>
+                                    <input type="text" class="form-control" id="cost-${newIndex}" name="events[${newIndex}].cost" placeholder="e.g. Free, $10, $5-20">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
 
             container.insertAdjacentHTML('beforeend', newEventHtml);
             addTimeEventListeners(newIndex);
+            updateAddEventButtonState();
         });
 
         // Event delegation for remove buttons
@@ -261,6 +320,8 @@
                 document.querySelectorAll('.event-section h4').forEach((header, index) => {
                     header.textContent = `Event #${index + 1}`;
                 });
+
+                updateAddEventButtonState();
             }
         });
 
@@ -290,8 +351,10 @@
                     title: formData.get(`events[${index}].title`),
                     url: formData.get(`events[${index}].url`),
                     date: formData.get(`events[${index}].date`),
+                    end_date: formData.get(`events[${index}].end_date`) || null,
                     time: formData.get(`events[${index}].time`),
-                    location: formData.get(`events[${index}].location`)
+                    location: formData.get(`events[${index}].location`),
+                    cost: formData.get(`events[${index}].cost`) || null
                 });
             });
             

@@ -7,5 +7,13 @@
             "autogen_policy": false,
             "iam_policy_file": "policy.json"
         }
+    },
+    "api_gateway_endpoint_type": "REGIONAL",
+    "lambda_functions": {
+        "api_handler": {
+            "include_files": {
+                "chalicelib/templates/": "chalicelib/templates/"
+            }
+        }
     }
 }
