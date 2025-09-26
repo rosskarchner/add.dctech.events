@@ -9,6 +9,7 @@ from datetime import datetime
 import uuid
 from github import Github
 import base64
+import re
 from jinja2 import Environment, FileSystemLoader
 from wtforms import Form, StringField, DateField, TimeField, URLField, TextAreaField, EmailField, validators
 from chalicelib.csrf import generate_csrf_token, validate_csrf_token
@@ -44,8 +45,34 @@ class ICalGroupForm(Form):
     ical = URLField('iCal Feed URL', [validators.DataRequired(), validators.URL()])
     fallback_url = URLField('Fallback URL', [validators.Optional(), validators.URL()])
 
+def sanitize_filename(name: str) -> str:
+    """Sanitize a string to be safe for use in filenames, preventing subdirectories."""
+    # Replace slashes and other problematic characters with dashes
+    sanitized = re.sub(r'[/\\<>:"|?*]', '-', name)
+    # Replace spaces with dashes
+    sanitized = sanitized.replace(' ', '-')
+    # Remove multiple consecutive dashes
+    sanitized = re.sub(r'-+', '-', sanitized)
+    # Remove leading/trailing dashes
+    sanitized = sanitized.strip('-')
+    # Ensure it's not empty
+    if not sanitized:
+        sanitized = 'untitled'
+    return sanitized.lower()
+
 app = Chalice(app_name='dctech-events-submit')
 app.debug = False
+
+# Load sites configuration
+with open(os.path.join(os.path.dirname(__file__), 'chalicelib', 'sites.json')) as f:
+    SITES_CONFIG = json.load(f)
+
+def get_site_by_slug(slug):
+    """Get site configuration by slug."""
+    for site in SITES_CONFIG['sites']:
+        if site['slug'] == slug:
+            return site
+    return None
 
 
 @app.middleware('http')
@@ -110,37 +137,75 @@ env = Environment(loader=FileSystemLoader(template_dir))
 
 @app.route('/')
 def index():
-    """Render the event submission form."""
+    """Redirect to default site."""
+    default_site = SITES_CONFIG['sites'][0]  # Use first site as default
+    return Response(
+        body='',
+        status_code=302,
+        headers={'Location': f'/{default_site["slug"]}'}
+    )
+
+@app.route('/{site_slug}')
+def site_index(site_slug):
+    """Render the event submission form for a specific site."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+    
     csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('form.html')
     return Response(
-        body=template.render(csrf_token=csrf_token),
+        body=template.render(csrf_token=csrf_token, site=site),
         headers={'Content-Type': 'text/html'}
     )
 
-@app.route('/meetup')
-def meetup():
-    """Render the meetup group submission form."""
+@app.route('/{site_slug}/meetup')
+def site_meetup(site_slug):
+    """Render the meetup group submission form for a specific site."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+    
     csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('meetup_form.html')
     return Response(
-        body=template.render(csrf_token=csrf_token),
+        body=template.render(csrf_token=csrf_token, site=site),
         headers={'Content-Type': 'text/html'}
     )
 
-@app.route('/ical')
-def ical():
-    """Render the iCal feed submission form."""
+@app.route('/{site_slug}/ical')
+def site_ical(site_slug):
+    """Render the iCal feed submission form for a specific site."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+    
     csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('ical_form.html')
     return Response(
-        body=template.render(csrf_token=csrf_token),
+        body=template.render(csrf_token=csrf_token, site=site),
         headers={'Content-Type': 'text/html'}
     )
 
-@app.route('/submit', methods=['POST'])
-def submit_event():
+@app.route('/{site_slug}/submit', methods=['POST'])
+def submit_event(site_slug):
     """Handle event submission."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+
     request: Request = app.current_request
     
     # Check Content-Type header
@@ -215,6 +280,7 @@ def submit_event():
             'submission_id': submission_id,
             'status': 'pending',
             'type': 'event',
+            'site_slug': site_slug,
             'email': data['email'],
             'data': {
                 'submitted_by': data.get('submitted_by', 'anonymous'),
@@ -227,7 +293,11 @@ def submit_event():
     )
     
     # Generate confirmation link
-    confirmation_url = f"https://add.dctech.events/confirm/{submission_id}"
+    domain_name = app.current_request.context.get('domainName')
+    if not domain_name:
+        # When running locally with chalice local, use localhost:8000
+        domain_name = os.environ.get('DOMAIN_NAME', 'localhost:8000')
+    confirmation_url = f"http{'s' if domain_name != 'localhost:8000' else ''}://{domain_name}/{site_slug}/confirm/{submission_id}"
     
     # Send confirmation email
     ses.send_email(
@@ -235,7 +305,7 @@ def submit_event():
         Destination={'ToAddresses': [data['email']]},
         Message={
             'Subject': {
-                'Data': 'Complete your DC Tech Events submission'
+                'Data': f'Complete your {site["name"]} submission'
             },
             'Body': {
                 'Text': {
@@ -245,11 +315,18 @@ def submit_event():
         }
     )
     
-    return {'message': 'Submission received. Please check your email (and maybe your spam folder) for an email from dctech.events with a confirmation link.'}
+    return {'message': 'Submission received. Please check your email (and maybe your spam folder) for an email with a confirmation link.'}
 
-@app.route('/submit_meetup', methods=['POST'])
-def submit_meetup():
+@app.route('/{site_slug}/submit_meetup', methods=['POST'])
+def submit_meetup(site_slug):
     """Handle meetup group submission."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+
     request: Request = app.current_request
     
     # Check Content-Type header
@@ -324,6 +401,7 @@ def submit_meetup():
             'submission_id': submission_id,
             'status': 'pending',
             'type': 'meetup',
+            'site_slug': site_slug,
             'email': data['email'],
             'data': {
                 'submitted_by': data.get('submitted_by', 'anonymous'),
@@ -340,7 +418,7 @@ def submit_meetup():
     if not domain_name:
         # When running locally with chalice local, use localhost:8000
         domain_name = os.environ.get('DOMAIN_NAME', 'localhost:8000')
-    confirmation_url = f"http{'s' if domain_name != 'localhost:8000' else ''}://{domain_name}/confirm/{submission_id}"
+    confirmation_url = f"http{'s' if domain_name != 'localhost:8000' else ''}://{domain_name}/{site_slug}/confirm/{submission_id}"
     
     # Send confirmation email
     ses.send_email(
@@ -348,7 +426,7 @@ def submit_meetup():
         Destination={'ToAddresses': [data['email']]},
         Message={
             'Subject': {
-                'Data': 'Complete your DC Tech Events submission'
+                'Data': f'Complete your {site["name"]} submission'
             },
             'Body': {
                 'Text': {
@@ -360,9 +438,16 @@ def submit_meetup():
     
     return {'message': 'Submission received. Please check your email for confirmation.'}
 
-@app.route('/submit_ical', methods=['POST'])
-def submit_ical():
+@app.route('/{site_slug}/submit_ical', methods=['POST'])
+def submit_ical(site_slug):
     """Handle iCal feed submission."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+
     request: Request = app.current_request
     
     # Check Content-Type header
@@ -413,6 +498,7 @@ def submit_ical():
             'submission_id': submission_id,
             'status': 'pending',
             'type': 'ical',
+            'site_slug': site_slug,
             'email': data['email'],
             'data': {
                 'name': data['name'],
@@ -432,7 +518,7 @@ def submit_ical():
     if not domain_name:
         # When running locally with chalice local, use localhost:8000
         domain_name = os.environ.get('DOMAIN_NAME', 'localhost:8000')
-    confirmation_url = f"http{'s' if domain_name != 'localhost:8000' else ''}://{domain_name}/confirm/{submission_id}"
+    confirmation_url = f"http{'s' if domain_name != 'localhost:8000' else ''}://{domain_name}/{site_slug}/confirm/{submission_id}"
     
     # Send confirmation email
     ses.send_email(
@@ -440,7 +526,7 @@ def submit_ical():
         Destination={'ToAddresses': [data['email']]},
         Message={
             'Subject': {
-                'Data': 'Complete your DC Tech Events submission'
+                'Data': f'Complete your {site["name"]} submission'
             },
             'Body': {
                 'Text': {
@@ -452,9 +538,16 @@ def submit_ical():
     
     return {'message': 'Submission received. Please check your email for confirmation.'}
 
-@app.route('/confirm/{submission_id}')
-def preview_confirmation(submission_id):
+@app.route('/{site_slug}/confirm/{submission_id}')
+def preview_confirmation(site_slug, submission_id):
     """Show confirmation preview page."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+
     # Get submission from DynamoDB
     submission = submissions_table.get_item(
         Key={'submission_id': submission_id}
@@ -472,16 +565,29 @@ def preview_confirmation(submission_id):
             status_code=400
         )
     
+    # Verify submission belongs to this site
+    if submission.get('site_slug') != site_slug:
+        return Response(
+            body={'error': 'Invalid site for this submission'},
+            status_code=400
+        )
+    
     csrf_token, _ = generate_csrf_token(CSRF_SECRET_KEY)
     template = env.get_template('confirm.html')
     return Response(
-        body=template.render(submission=submission, csrf_token=csrf_token),
+        body=template.render(submission=submission, csrf_token=csrf_token, site=site),
         headers={'Content-Type': 'text/html'}
     )
-
-@app.route('/confirm/{submission_id}/submit', methods=['POST'])
-def confirm_submission(submission_id):
+@app.route('/{site_slug}/confirm/{submission_id}/submit', methods=['POST'])
+def confirm_submission(site_slug, submission_id):
     """Handle submission confirmation and create GitHub PR."""
+    site = get_site_by_slug(site_slug)
+    if not site:
+        return Response(
+            body={'error': 'Site not found'},
+            status_code=404
+        )
+
     request: Request = app.current_request
     
     # Accept both application/json and application/x-www-form-urlencoded
@@ -525,10 +631,19 @@ def confirm_submission(submission_id):
             status_code=400
         )
     
+    # Verify submission belongs to this site
+    if submission.get('site_slug') != site_slug:
+        return Response(
+            body={'error': 'Invalid site for this submission'},
+            status_code=400
+        )
+    
     # Create GitHub PR
     github_token = get_secret(os.environ.get('GITHUB_TOKEN_SECRET_NAME', 'dctech-events/github-token'))
     g = Github(github_token)
-    repo = g.get_repo('rosskarchner/dctech.events')
+    repo_url = site['github_repo']
+    repo_name = repo_url.split('github.com/')[1]
+    repo = g.get_repo(repo_name)
     
     # Create branch name
     branch_name = f'submission-{submission_id[:8]}'
@@ -566,7 +681,7 @@ def confirm_submission(submission_id):
             event_yaml = yaml.dump(event_data, default_flow_style=False)
             
             # Create file name based on title and date
-            safe_title = event['title'].lower().replace(' ', '-')
+            safe_title = sanitize_filename(event['title'])
             file_name = f"_single_events/{event['date']}-{safe_title}.yaml"
             
             # Create file in the new branch
@@ -603,7 +718,7 @@ def confirm_submission(submission_id):
             group_yaml = yaml.dump(group_data, default_flow_style=False)
             
             # Create file name based on group name
-            safe_name = group['name'].lower().replace(' ', '-')
+            safe_name = sanitize_filename(group['name'])
             file_name = f"_groups/meetup-{safe_name}.yaml"
             
             # Create file in the new branch
@@ -636,7 +751,7 @@ def confirm_submission(submission_id):
         group_yaml = yaml.dump(group_data, default_flow_style=False)
         
         # Create file name based on group name
-        safe_name = submission['data']['name'].lower().replace(' ', '-')
+        safe_name = sanitize_filename(submission['data']['name'])
         file_name = f"_groups/ical-{safe_name}.yaml"
         
         # Create file in the new branch
@@ -674,25 +789,12 @@ def confirm_submission(submission_id):
         }
     )
     
-    # Send email with PR link
-    ses.send_email(
-        Source=os.environ.get('SENDER_EMAIL', 'outgoing@dctech.events'),
-        Destination={'ToAddresses': [submission['email']]},
-        Message={
-            'Subject': {
-                'Data': 'Your DC Tech Events submission is ready for review'
-            },
-            'Body': {
-                'Text': {
-                    'Data': f'Your submission has been processed. You can view the pull request here: {pr.html_url}'
-                }
-            }
-        }
-    )
+
     
     # Render success page
     template = env.get_template('success.html')
     return Response(
-        body=template.render(pr_url=pr.html_url),
+        body=template.render(pr_url=pr.html_url, site=site),
         headers={'Content-Type': 'text/html'}
     )
+

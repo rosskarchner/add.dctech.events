@@ -1,0 +1,10 @@
+{
+  "sites": [
+    {
+      "slug": "dctech",
+      "name": "DC Tech Events",
+      "url": "https://dctech.events",
+      "github_repo": "https://github.com/rosskarchner/dctech.events"
+    }
+  ]
+}
