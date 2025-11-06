@@ -10,6 +10,7 @@ import uuid
 from github import Github
 import base64
 import re
+import requests
 from jinja2 import Environment, FileSystemLoader
 from wtforms import Form, StringField, DateField, TimeField, URLField, TextAreaField, EmailField, validators
 from chalicelib.csrf import generate_csrf_token, validate_csrf_token
@@ -144,6 +145,106 @@ def index():
         status_code=302,
         headers={'Location': f'/{default_site["slug"]}'}
     )
+
+@app.route('/oauth/callback', methods=['GET'])
+def oauth_callback():
+    """
+    Handle GitHub OAuth callback
+    Exchange authorization code for access token
+    """
+    # Get authorization code from query params
+    code = app.current_request.query_params.get('code') if app.current_request.query_params else None
+    state = app.current_request.query_params.get('state') if app.current_request.query_params else None
+    error = app.current_request.query_params.get('error') if app.current_request.query_params else None
+
+    # Handle errors
+    if error:
+        return Response(
+            body='',
+            status_code=302,
+            headers={
+                'Location': f'https://dctech.events/submit/?error={error}'
+            }
+        )
+
+    if not code:
+        return Response(
+            body='',
+            status_code=302,
+            headers={
+                'Location': 'https://dctech.events/submit/?error=missing_code'
+            }
+        )
+
+    # Get OAuth credentials from environment
+    client_id = os.environ.get('GITHUB_CLIENT_ID')
+    client_secret = os.environ.get('GITHUB_CLIENT_SECRET')
+
+    if not client_id or not client_secret:
+        return Response(
+            body='',
+            status_code=302,
+            headers={
+                'Location': 'https://dctech.events/submit/?error=oauth_not_configured'
+            }
+        )
+
+    # Exchange code for access token
+    try:
+        token_response = requests.post(
+            'https://github.com/login/oauth/access_token',
+            headers={
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            json={
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'code': code,
+                'state': state
+            }
+        )
+
+        token_data = token_response.json()
+
+        if 'error' in token_data:
+            return Response(
+                body='',
+                status_code=302,
+                headers={
+                    'Location': f'https://dctech.events/submit/?error={token_data["error"]}'
+                }
+            )
+
+        access_token = token_data.get('access_token')
+
+        if not access_token:
+            return Response(
+                body='',
+                status_code=302,
+                headers={
+                    'Location': 'https://dctech.events/submit/?error=no_token'
+                }
+            )
+
+        # Redirect back to dctech.events with the access token
+        return Response(
+            body='',
+            status_code=302,
+            headers={
+                'Location': f'https://dctech.events/submit/?access_token={access_token}'
+            }
+        )
+
+    except Exception as e:
+        print(f"OAuth error: {str(e)}")
+        return Response(
+            body='',
+            status_code=302,
+            headers={
+                'Location': 'https://dctech.events/submit/?error=exchange_failed'
+            }
+        )
 
 @app.route('/{site_slug}')
 def site_index(site_slug):
