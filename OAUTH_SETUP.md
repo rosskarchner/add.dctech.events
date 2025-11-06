@@ -310,6 +310,42 @@ export OAUTH_CALLBACK_ENDPOINT=https://add.dctech.events/oauth/callback
 - Ensure the OAuth callback route is deployed in add.dctech.events
 - Check API Gateway routes in AWS Console
 
+### MIME Type Error with Octokit CDN
+
+**Error**: `The resource from "https://cdn.jsdelivr.net/npm/@octokit/core@5.0.0/dist/bundle.min.js" was blocked due to MIME type ("text/plain") mismatch (X-Content-Type-Options: nosniff).`
+
+**Problem**: The old jsdelivr CDN path for Octokit bundles doesn't work correctly due to MIME type issues.
+
+**Solution**: Use ES modules instead of the old bundle format. There are several options:
+
+1. **Use esm.sh CDN (Recommended)**:
+   ```html
+   <script type="module">
+     import { Octokit } from 'https://esm.sh/@octokit/core@5';
+   </script>
+   ```
+
+2. **Use jsdelivr with +esm suffix**:
+   ```html
+   <script type="module">
+     import { Octokit } from 'https://cdn.jsdelivr.net/npm/@octokit/core@5/+esm';
+   </script>
+   ```
+
+3. **Use unpkg**:
+   ```html
+   <script type="module">
+     import { Octokit } from 'https://unpkg.com/@octokit/core@5.0.2/dist-web/index.js';
+   </script>
+   ```
+
+**Example**: See `chalicelib/templates/github_submit_example.html` for a complete working example that uses ES modules to avoid the MIME type issue.
+
+**Important**: When using ES modules, you must:
+- Use `<script type="module">` instead of `<script>`
+- Use `import` statements instead of loading the library globally
+- Note that ES modules are only supported in modern browsers (Chrome 61+, Firefox 60+, Safari 11+, Edge 79+)
+
 ## Alternative: GitHub Device Flow
 
 If you prefer to avoid server-side OAuth, you can use GitHub's Device Flow:
